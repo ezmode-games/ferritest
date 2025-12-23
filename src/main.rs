@@ -25,7 +25,11 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
 
-    #[arg(long, default_value_t = false, help = "Run continuously until error or interrupt")]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run continuously until error or interrupt"
+    )]
     continuous: bool,
 }
 
@@ -237,7 +241,7 @@ fn test_memory_block(
 ) -> Option<MemoryError> {
     pattern.fill_block(block, seed);
 
-    stats.add_bytes((block.len() * std::mem::size_of::<u64>()) as u64);
+    stats.add_bytes(std::mem::size_of_val(block) as u64);
 
     if let Err(offset) = pattern.verify_block(block, seed) {
         stats.add_error();
@@ -339,7 +343,7 @@ fn main() {
 
     let num_threads = args.threads.unwrap_or_else(num_cpus::get);
     let total_blocks = (args.memory_mb * 1024 * 1024) / BLOCK_SIZE;
-    let blocks_per_thread = (total_blocks + num_threads - 1) / num_threads;
+    let blocks_per_thread = total_blocks.div_ceil(num_threads);
     let actual_memory_mb = (blocks_per_thread * num_threads * BLOCK_SIZE) / (1024 * 1024);
 
     println!("Memory Stress Test");
@@ -475,7 +479,10 @@ fn main() {
     println!();
     println!("Test Complete");
     println!("=============");
-    println!("Total bytes tested: {} MB", stats.get_bytes() / (1024 * 1024));
+    println!(
+        "Total bytes tested: {} MB",
+        stats.get_bytes() / (1024 * 1024)
+    );
     println!("Total tests completed: {}", stats.get_tests());
     println!("Errors found: {}", errors.len());
     println!("Duration: {:.2}s", start_time.elapsed().as_secs_f64());
@@ -498,5 +505,331 @@ fn main() {
         println!();
         println!("SUCCESS: No memory errors detected!");
         std::process::exit(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_BLOCK_SIZE: usize = 1024; // Small block for fast tests
+
+    #[test]
+    fn test_all_patterns_count() {
+        assert_eq!(TestPattern::all_patterns().len(), 8);
+    }
+
+    #[test]
+    fn test_pattern_names() {
+        let patterns = TestPattern::all_patterns();
+        let names: Vec<&str> = patterns.iter().map(|p| p.name()).collect();
+        assert!(names.contains(&"Walking Ones"));
+        assert!(names.contains(&"Walking Zeros"));
+        assert!(names.contains(&"Checkerboard"));
+        assert!(names.contains(&"Inverse Checkerboard"));
+        assert!(names.contains(&"Random Pattern"));
+        assert!(names.contains(&"All Zeros"));
+        assert!(names.contains(&"All Ones"));
+        assert!(names.contains(&"Sequential"));
+    }
+
+    #[test]
+    fn test_walking_ones_fill_and_verify() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::WalkingOnes;
+
+        pattern.fill_block(&mut block, 0);
+
+        // Check first 64 values follow walking ones pattern
+        for i in 0..64 {
+            assert_eq!(block[i], 1u64 << i, "Walking ones failed at index {}", i);
+        }
+
+        // Verify should pass
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_walking_zeros_fill_and_verify() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::WalkingZeros;
+
+        pattern.fill_block(&mut block, 0);
+
+        // Check first 64 values follow walking zeros pattern
+        for i in 0..64 {
+            assert_eq!(
+                block[i],
+                !(1u64 << i),
+                "Walking zeros failed at index {}",
+                i
+            );
+        }
+
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_checkerboard_fill_and_verify() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::Checkerboard;
+
+        pattern.fill_block(&mut block, 0);
+
+        for (i, &val) in block.iter().enumerate() {
+            assert_eq!(
+                val, 0xAAAAAAAAAAAAAAAA,
+                "Checkerboard failed at index {}",
+                i
+            );
+        }
+
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_inverse_checkerboard_fill_and_verify() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::InverseCheckerboard;
+
+        pattern.fill_block(&mut block, 0);
+
+        for (i, &val) in block.iter().enumerate() {
+            assert_eq!(
+                val, 0x5555555555555555,
+                "Inverse checkerboard failed at index {}",
+                i
+            );
+        }
+
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_all_zeros_fill_and_verify() {
+        let mut block = vec![1u64; TEST_BLOCK_SIZE]; // Start with ones
+        let pattern = TestPattern::AllZeros;
+
+        pattern.fill_block(&mut block, 0);
+
+        for (i, &val) in block.iter().enumerate() {
+            assert_eq!(val, 0, "All zeros failed at index {}", i);
+        }
+
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_all_ones_fill_and_verify() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::AllOnes;
+
+        pattern.fill_block(&mut block, 0);
+
+        for (i, &val) in block.iter().enumerate() {
+            assert_eq!(val, u64::MAX, "All ones failed at index {}", i);
+        }
+
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_sequential_fill_and_verify() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::Sequential;
+
+        pattern.fill_block(&mut block, 0);
+
+        for (i, &val) in block.iter().enumerate() {
+            assert_eq!(val, i as u64, "Sequential failed at index {}", i);
+        }
+
+        assert!(pattern.verify_block(&block, 0).is_ok());
+    }
+
+    #[test]
+    fn test_random_pattern_deterministic() {
+        let mut block1 = vec![0u64; TEST_BLOCK_SIZE];
+        let mut block2 = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::RandomPattern;
+        let seed = 12345;
+
+        pattern.fill_block(&mut block1, seed);
+        pattern.fill_block(&mut block2, seed);
+
+        // Same seed should produce same pattern
+        assert_eq!(block1, block2);
+
+        // Verify should pass
+        assert!(pattern.verify_block(&block1, seed).is_ok());
+    }
+
+    #[test]
+    fn test_random_pattern_different_seeds() {
+        let mut block1 = vec![0u64; TEST_BLOCK_SIZE];
+        let mut block2 = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::RandomPattern;
+
+        pattern.fill_block(&mut block1, 1);
+        pattern.fill_block(&mut block2, 2);
+
+        // Different seeds should produce different patterns
+        assert_ne!(block1, block2);
+    }
+
+    #[test]
+    fn test_verify_detects_corruption() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::AllOnes;
+
+        pattern.fill_block(&mut block, 0);
+
+        // Corrupt one value
+        block[42] = 0;
+
+        // Verify should fail and return the corrupted index
+        let result = pattern.verify_block(&block, 0);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), 42);
+    }
+
+    #[test]
+    fn test_verify_detects_first_corruption() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let pattern = TestPattern::Sequential;
+
+        pattern.fill_block(&mut block, 0);
+
+        // Corrupt multiple values
+        block[10] = 999;
+        block[50] = 999;
+
+        // Should return first corrupted index
+        let result = pattern.verify_block(&block, 0);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), 10);
+    }
+
+    #[test]
+    fn test_stats_tracking() {
+        let stats = TestStats::new();
+
+        assert_eq!(stats.get_bytes(), 0);
+        assert_eq!(stats.get_errors(), 0);
+        assert_eq!(stats.get_tests(), 0);
+
+        stats.add_bytes(1024);
+        stats.add_bytes(2048);
+        assert_eq!(stats.get_bytes(), 3072);
+
+        stats.add_error();
+        stats.add_error();
+        assert_eq!(stats.get_errors(), 2);
+
+        stats.add_test();
+        assert_eq!(stats.get_tests(), 1);
+    }
+
+    #[test]
+    fn test_stats_thread_safe() {
+        use std::thread;
+
+        let stats = Arc::new(TestStats::new());
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let stats_clone = Arc::clone(&stats);
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    stats_clone.add_bytes(1);
+                    stats_clone.add_test();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(stats.get_bytes(), 1000);
+        assert_eq!(stats.get_tests(), 1000);
+    }
+
+    #[test]
+    fn test_parse_duration_minutes() {
+        let duration = parse_duration("5m");
+        assert!(duration.is_some());
+        assert_eq!(duration.unwrap(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_parse_duration_hours() {
+        let duration = parse_duration("2h");
+        assert!(duration.is_some());
+        assert_eq!(duration.unwrap(), Duration::from_secs(7200));
+    }
+
+    #[test]
+    fn test_parse_duration_seconds() {
+        let duration = parse_duration("30s");
+        assert!(duration.is_some());
+        assert_eq!(duration.unwrap(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_parse_duration_infinite() {
+        assert!(parse_duration("infinite").is_none());
+        assert!(parse_duration("INFINITE").is_none());
+        assert!(parse_duration("Infinite").is_none());
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        assert!(parse_duration("invalid").is_none());
+        assert!(parse_duration("").is_none());
+    }
+
+    #[test]
+    fn test_memory_block_no_error() {
+        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let stats = TestStats::new();
+
+        let result = test_memory_block(&mut block, TestPattern::AllOnes, 0, 0, &stats);
+
+        assert!(result.is_none());
+        assert!(stats.get_bytes() > 0);
+        assert_eq!(stats.get_errors(), 0);
+        assert_eq!(stats.get_tests(), 1);
+    }
+
+    #[test]
+    fn test_all_patterns_fill_and_verify() {
+        for pattern in TestPattern::all_patterns() {
+            let mut block = vec![0u64; TEST_BLOCK_SIZE];
+            let seed = 42;
+
+            pattern.fill_block(&mut block, seed);
+            let result = pattern.verify_block(&block, seed);
+
+            assert!(
+                result.is_ok(),
+                "Pattern {:?} failed fill/verify cycle",
+                pattern.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_checkerboard_inverse_relationship() {
+        let mut block1 = vec![0u64; TEST_BLOCK_SIZE];
+        let mut block2 = vec![0u64; TEST_BLOCK_SIZE];
+
+        TestPattern::Checkerboard.fill_block(&mut block1, 0);
+        TestPattern::InverseCheckerboard.fill_block(&mut block2, 0);
+
+        // Checkerboard and inverse should be bitwise complements
+        for i in 0..TEST_BLOCK_SIZE {
+            assert_eq!(block1[i] ^ block2[i], u64::MAX);
+        }
     }
 }
