@@ -68,9 +68,9 @@ impl BufferManager {
     /// * `device` - The wgpu device for buffer allocation
     /// * `memory_mb` - Amount of VRAM to allocate in megabytes
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns `GpuError::BufferAllocation` if buffer creation fails.
+    /// Panics if the GPU cannot allocate the requested buffer size.
     pub fn new(device: &Device, memory_mb: usize) -> Result<Self, GpuError> {
         let buffer_size = (memory_mb * 1024 * 1024) as u64;
         let element_count = (buffer_size / 4) as u32; // u32 elements
@@ -165,10 +165,10 @@ mod tests {
     use crate::gpu::device::select_gpu;
     use pollster::block_on;
 
-    fn setup_device() -> Option<Device> {
+    fn setup_device() -> Option<(Device, Queue)> {
         let adapter = select_gpu(None).ok()?;
 
-        let (device, _queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("test device"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
@@ -178,7 +178,7 @@ mod tests {
         }))
         .ok()?;
 
-        Some(device)
+        Some((device, queue))
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_buffer_manager_creation() {
-        let Some(device) = setup_device() else {
+        let Some((device, _queue)) = setup_device() else {
             println!("No GPU available, skipping buffer manager test");
             return;
         };
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_buffer_size() {
-        let Some(device) = setup_device() else {
+        let Some((device, _queue)) = setup_device() else {
             println!("No GPU available, skipping buffer size test");
             return;
         };
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_element_count() {
-        let Some(device) = setup_device() else {
+        let Some((device, _queue)) = setup_device() else {
             println!("No GPU available, skipping element count test");
             return;
         };
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_buffer_accessors() {
-        let Some(device) = setup_device() else {
+        let Some((device, _queue)) = setup_device() else {
             println!("No GPU available, skipping buffer accessor test");
             return;
         };
@@ -250,5 +250,37 @@ mod tests {
         let _ = manager.params_buffer();
         let _ = manager.error_buffer();
         let _ = manager.error_staging_buffer();
+    }
+
+    #[test]
+    fn test_update_params() {
+        let Some((device, queue)) = setup_device() else {
+            println!("No GPU available, skipping update_params test");
+            return;
+        };
+
+        let manager = BufferManager::new(&device, 16).unwrap();
+        let params = ShaderParams {
+            pattern_id: 3,
+            seed: 12345,
+            total_elements: 1000,
+            _padding: 0,
+        };
+
+        // Should not panic
+        manager.update_params(&queue, &params);
+    }
+
+    #[test]
+    fn test_reset_errors() {
+        let Some((device, queue)) = setup_device() else {
+            println!("No GPU available, skipping reset_errors test");
+            return;
+        };
+
+        let manager = BufferManager::new(&device, 16).unwrap();
+
+        // Should not panic
+        manager.reset_errors(&queue);
     }
 }
