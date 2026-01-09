@@ -1,3 +1,5 @@
+mod patterns;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -5,7 +7,8 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use crossbeam::channel;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rand::{Rng, SeedableRng};
+use patterns::TestPattern;
+use rand::Rng;
 
 const BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64 MB per block
 const DEFAULT_TOTAL_MB: usize = 1024; // 1 GB default
@@ -31,158 +34,6 @@ struct Args {
         help = "Run continuously until error or interrupt"
     )]
     continuous: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TestPattern {
-    WalkingOnes,
-    WalkingZeros,
-    Checkerboard,
-    InverseCheckerboard,
-    RandomPattern,
-    AllZeros,
-    AllOnes,
-    Sequential,
-}
-
-impl TestPattern {
-    fn all_patterns() -> Vec<Self> {
-        vec![
-            Self::WalkingOnes,
-            Self::WalkingZeros,
-            Self::Checkerboard,
-            Self::InverseCheckerboard,
-            Self::RandomPattern,
-            Self::AllZeros,
-            Self::AllOnes,
-            Self::Sequential,
-        ]
-    }
-
-    fn name(&self) -> &'static str {
-        match self {
-            Self::WalkingOnes => "Walking Ones",
-            Self::WalkingZeros => "Walking Zeros",
-            Self::Checkerboard => "Checkerboard",
-            Self::InverseCheckerboard => "Inverse Checkerboard",
-            Self::RandomPattern => "Random Pattern",
-            Self::AllZeros => "All Zeros",
-            Self::AllOnes => "All Ones",
-            Self::Sequential => "Sequential",
-        }
-    }
-
-    fn fill_block(&self, block: &mut [u64], seed: u64) {
-        match self {
-            Self::WalkingOnes => {
-                for (i, val) in block.iter_mut().enumerate() {
-                    *val = 1u64.wrapping_shl((i % 64) as u32);
-                }
-            }
-            Self::WalkingZeros => {
-                for (i, val) in block.iter_mut().enumerate() {
-                    *val = !1u64.wrapping_shl((i % 64) as u32);
-                }
-            }
-            Self::Checkerboard => {
-                for val in block.iter_mut() {
-                    *val = 0xAAAAAAAAAAAAAAAA;
-                }
-            }
-            Self::InverseCheckerboard => {
-                for val in block.iter_mut() {
-                    *val = 0x5555555555555555;
-                }
-            }
-            Self::RandomPattern => {
-                let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-                for val in block.iter_mut() {
-                    *val = rng.gen();
-                }
-            }
-            Self::AllZeros => {
-                for val in block.iter_mut() {
-                    *val = 0;
-                }
-            }
-            Self::AllOnes => {
-                for val in block.iter_mut() {
-                    *val = u64::MAX;
-                }
-            }
-            Self::Sequential => {
-                for (i, val) in block.iter_mut().enumerate() {
-                    *val = i as u64;
-                }
-            }
-        }
-    }
-
-    fn verify_block(&self, block: &[u64], seed: u64) -> Result<(), usize> {
-        match self {
-            Self::WalkingOnes => {
-                for (i, &val) in block.iter().enumerate() {
-                    let expected = 1u64.wrapping_shl((i % 64) as u32);
-                    if val != expected {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::WalkingZeros => {
-                for (i, &val) in block.iter().enumerate() {
-                    let expected = !1u64.wrapping_shl((i % 64) as u32);
-                    if val != expected {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::Checkerboard => {
-                for (i, &val) in block.iter().enumerate() {
-                    if val != 0xAAAAAAAAAAAAAAAA {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::InverseCheckerboard => {
-                for (i, &val) in block.iter().enumerate() {
-                    if val != 0x5555555555555555 {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::RandomPattern => {
-                let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-                for (i, &val) in block.iter().enumerate() {
-                    let expected: u64 = rng.gen();
-                    if val != expected {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::AllZeros => {
-                for (i, &val) in block.iter().enumerate() {
-                    if val != 0 {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::AllOnes => {
-                for (i, &val) in block.iter().enumerate() {
-                    if val != u64::MAX {
-                        return Err(i);
-                    }
-                }
-            }
-            Self::Sequential => {
-                for (i, &val) in block.iter().enumerate() {
-                    if val != i as u64 {
-                        return Err(i);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -512,204 +363,6 @@ fn main() {
 mod tests {
     use super::*;
 
-    const TEST_BLOCK_SIZE: usize = 1024; // Small block for fast tests
-
-    #[test]
-    fn test_all_patterns_count() {
-        assert_eq!(TestPattern::all_patterns().len(), 8);
-    }
-
-    #[test]
-    fn test_pattern_names() {
-        let patterns = TestPattern::all_patterns();
-        let names: Vec<&str> = patterns.iter().map(|p| p.name()).collect();
-        assert!(names.contains(&"Walking Ones"));
-        assert!(names.contains(&"Walking Zeros"));
-        assert!(names.contains(&"Checkerboard"));
-        assert!(names.contains(&"Inverse Checkerboard"));
-        assert!(names.contains(&"Random Pattern"));
-        assert!(names.contains(&"All Zeros"));
-        assert!(names.contains(&"All Ones"));
-        assert!(names.contains(&"Sequential"));
-    }
-
-    #[test]
-    fn test_walking_ones_fill_and_verify() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::WalkingOnes;
-
-        pattern.fill_block(&mut block, 0);
-
-        // Check first 64 values follow walking ones pattern
-        for i in 0..64 {
-            assert_eq!(block[i], 1u64 << i, "Walking ones failed at index {}", i);
-        }
-
-        // Verify should pass
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_walking_zeros_fill_and_verify() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::WalkingZeros;
-
-        pattern.fill_block(&mut block, 0);
-
-        // Check first 64 values follow walking zeros pattern
-        for i in 0..64 {
-            assert_eq!(
-                block[i],
-                !(1u64 << i),
-                "Walking zeros failed at index {}",
-                i
-            );
-        }
-
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_checkerboard_fill_and_verify() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::Checkerboard;
-
-        pattern.fill_block(&mut block, 0);
-
-        for (i, &val) in block.iter().enumerate() {
-            assert_eq!(
-                val, 0xAAAAAAAAAAAAAAAA,
-                "Checkerboard failed at index {}",
-                i
-            );
-        }
-
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_inverse_checkerboard_fill_and_verify() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::InverseCheckerboard;
-
-        pattern.fill_block(&mut block, 0);
-
-        for (i, &val) in block.iter().enumerate() {
-            assert_eq!(
-                val, 0x5555555555555555,
-                "Inverse checkerboard failed at index {}",
-                i
-            );
-        }
-
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_all_zeros_fill_and_verify() {
-        let mut block = vec![1u64; TEST_BLOCK_SIZE]; // Start with ones
-        let pattern = TestPattern::AllZeros;
-
-        pattern.fill_block(&mut block, 0);
-
-        for (i, &val) in block.iter().enumerate() {
-            assert_eq!(val, 0, "All zeros failed at index {}", i);
-        }
-
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_all_ones_fill_and_verify() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::AllOnes;
-
-        pattern.fill_block(&mut block, 0);
-
-        for (i, &val) in block.iter().enumerate() {
-            assert_eq!(val, u64::MAX, "All ones failed at index {}", i);
-        }
-
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_sequential_fill_and_verify() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::Sequential;
-
-        pattern.fill_block(&mut block, 0);
-
-        for (i, &val) in block.iter().enumerate() {
-            assert_eq!(val, i as u64, "Sequential failed at index {}", i);
-        }
-
-        assert!(pattern.verify_block(&block, 0).is_ok());
-    }
-
-    #[test]
-    fn test_random_pattern_deterministic() {
-        let mut block1 = vec![0u64; TEST_BLOCK_SIZE];
-        let mut block2 = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::RandomPattern;
-        let seed = 12345;
-
-        pattern.fill_block(&mut block1, seed);
-        pattern.fill_block(&mut block2, seed);
-
-        // Same seed should produce same pattern
-        assert_eq!(block1, block2);
-
-        // Verify should pass
-        assert!(pattern.verify_block(&block1, seed).is_ok());
-    }
-
-    #[test]
-    fn test_random_pattern_different_seeds() {
-        let mut block1 = vec![0u64; TEST_BLOCK_SIZE];
-        let mut block2 = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::RandomPattern;
-
-        pattern.fill_block(&mut block1, 1);
-        pattern.fill_block(&mut block2, 2);
-
-        // Different seeds should produce different patterns
-        assert_ne!(block1, block2);
-    }
-
-    #[test]
-    fn test_verify_detects_corruption() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::AllOnes;
-
-        pattern.fill_block(&mut block, 0);
-
-        // Corrupt one value
-        block[42] = 0;
-
-        // Verify should fail and return the corrupted index
-        let result = pattern.verify_block(&block, 0);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 42);
-    }
-
-    #[test]
-    fn test_verify_detects_first_corruption() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
-        let pattern = TestPattern::Sequential;
-
-        pattern.fill_block(&mut block, 0);
-
-        // Corrupt multiple values
-        block[10] = 999;
-        block[50] = 999;
-
-        // Should return first corrupted index
-        let result = pattern.verify_block(&block, 0);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 10);
-    }
-
     #[test]
     fn test_stats_tracking() {
         let stats = TestStats::new();
@@ -791,7 +444,7 @@ mod tests {
 
     #[test]
     fn test_memory_block_no_error() {
-        let mut block = vec![0u64; TEST_BLOCK_SIZE];
+        let mut block = vec![0u64; 1024];
         let stats = TestStats::new();
 
         let result = test_memory_block(&mut block, TestPattern::AllOnes, 0, 0, &stats);
@@ -800,36 +453,5 @@ mod tests {
         assert!(stats.get_bytes() > 0);
         assert_eq!(stats.get_errors(), 0);
         assert_eq!(stats.get_tests(), 1);
-    }
-
-    #[test]
-    fn test_all_patterns_fill_and_verify() {
-        for pattern in TestPattern::all_patterns() {
-            let mut block = vec![0u64; TEST_BLOCK_SIZE];
-            let seed = 42;
-
-            pattern.fill_block(&mut block, seed);
-            let result = pattern.verify_block(&block, seed);
-
-            assert!(
-                result.is_ok(),
-                "Pattern {:?} failed fill/verify cycle",
-                pattern.name()
-            );
-        }
-    }
-
-    #[test]
-    fn test_checkerboard_inverse_relationship() {
-        let mut block1 = vec![0u64; TEST_BLOCK_SIZE];
-        let mut block2 = vec![0u64; TEST_BLOCK_SIZE];
-
-        TestPattern::Checkerboard.fill_block(&mut block1, 0);
-        TestPattern::InverseCheckerboard.fill_block(&mut block2, 0);
-
-        // Checkerboard and inverse should be bitwise complements
-        for i in 0..TEST_BLOCK_SIZE {
-            assert_eq!(block1[i] ^ block2[i], u64::MAX);
-        }
     }
 }
