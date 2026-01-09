@@ -208,6 +208,41 @@ mod tests {
     }
 
     #[test]
+    fn test_device_request_display() {
+        let err = GpuError::DeviceRequest("connection failed".to_string());
+        assert!(err.to_string().contains("connection failed"));
+    }
+
+    #[test]
+    fn test_shader_compilation_display() {
+        let err = GpuError::ShaderCompilation("syntax error at line 5".to_string());
+        assert!(err.to_string().contains("syntax error at line 5"));
+    }
+
+    #[test]
+    fn test_device_lost_display() {
+        let err = GpuError::DeviceLost;
+        assert!(err.to_string().contains("device lost"));
+    }
+
+    #[test]
+    fn test_buffer_mapping_display() {
+        let err = GpuError::BufferMapping("timeout waiting for GPU".to_string());
+        assert!(err.to_string().contains("timeout waiting for GPU"));
+    }
+
+    #[test]
+    fn test_insufficient_vram_display() {
+        let err = GpuError::InsufficientVram {
+            needed_mb: 16384,
+            available_mb: 8192,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("16384"));
+        assert!(msg.contains("8192"));
+    }
+
+    #[test]
     fn test_memory_error_info_into_ferritest_error() {
         let info = MemoryErrorInfo::new(TestPattern::Checkerboard, 512, 2);
         let err: FerritestError = info.into();

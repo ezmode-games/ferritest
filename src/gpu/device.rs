@@ -104,8 +104,9 @@ pub fn select_gpu(index: Option<usize>) -> Result<Adapter, GpuError> {
 /// 1. Discrete GPU
 /// 2. Integrated GPU
 /// 3. Virtual GPU
-/// 4. CPU (software rendering)
-/// 5. Any other
+///
+/// If none of the above are found, falls back to the first available adapter
+/// (which may be a CPU or another device type).
 fn auto_select_gpu(adapters: &[Adapter]) -> Option<&Adapter> {
     // Try to find discrete GPU first
     if let Some(adapter) = adapters
