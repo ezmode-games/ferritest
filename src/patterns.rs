@@ -53,6 +53,22 @@ impl TestPattern {
         }
     }
 
+    /// Returns the numeric pattern ID for GPU shaders.
+    ///
+    /// These IDs must match the constants in the WGSL shader files.
+    pub fn pattern_id(&self) -> u32 {
+        match self {
+            Self::WalkingOnes => 0,
+            Self::WalkingZeros => 1,
+            Self::Checkerboard => 2,
+            Self::InverseCheckerboard => 3,
+            Self::RandomPattern => 4,
+            Self::AllZeros => 5,
+            Self::AllOnes => 6,
+            Self::Sequential => 7,
+        }
+    }
+
     /// Fills a memory block with this pattern.
     ///
     /// # Arguments
