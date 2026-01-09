@@ -1,6 +1,7 @@
 mod patterns;
+mod stats;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use crossbeam::channel;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use patterns::TestPattern;
 use rand::Rng;
+use stats::TestStats;
 
 const BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64 MB per block
 const DEFAULT_TOTAL_MB: usize = 1024; // 1 GB default
@@ -41,46 +43,6 @@ struct MemoryError {
     pattern: TestPattern,
     offset: usize,
     thread_id: usize,
-}
-
-struct TestStats {
-    bytes_tested: AtomicU64,
-    errors_found: AtomicU64,
-    tests_completed: AtomicU64,
-}
-
-impl TestStats {
-    fn new() -> Self {
-        Self {
-            bytes_tested: AtomicU64::new(0),
-            errors_found: AtomicU64::new(0),
-            tests_completed: AtomicU64::new(0),
-        }
-    }
-
-    fn add_bytes(&self, bytes: u64) {
-        self.bytes_tested.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    fn add_error(&self) {
-        self.errors_found.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn add_test(&self) {
-        self.tests_completed.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn get_bytes(&self) -> u64 {
-        self.bytes_tested.load(Ordering::Relaxed)
-    }
-
-    fn get_errors(&self) -> u64 {
-        self.errors_found.load(Ordering::Relaxed)
-    }
-
-    fn get_tests(&self) -> u64 {
-        self.tests_completed.load(Ordering::Relaxed)
-    }
 }
 
 fn test_memory_block(
@@ -362,51 +324,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_stats_tracking() {
-        let stats = TestStats::new();
-
-        assert_eq!(stats.get_bytes(), 0);
-        assert_eq!(stats.get_errors(), 0);
-        assert_eq!(stats.get_tests(), 0);
-
-        stats.add_bytes(1024);
-        stats.add_bytes(2048);
-        assert_eq!(stats.get_bytes(), 3072);
-
-        stats.add_error();
-        stats.add_error();
-        assert_eq!(stats.get_errors(), 2);
-
-        stats.add_test();
-        assert_eq!(stats.get_tests(), 1);
-    }
-
-    #[test]
-    fn test_stats_thread_safe() {
-        use std::thread;
-
-        let stats = Arc::new(TestStats::new());
-        let mut handles = vec![];
-
-        for _ in 0..10 {
-            let stats_clone = Arc::clone(&stats);
-            handles.push(thread::spawn(move || {
-                for _ in 0..100 {
-                    stats_clone.add_bytes(1);
-                    stats_clone.add_test();
-                }
-            }));
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        assert_eq!(stats.get_bytes(), 1000);
-        assert_eq!(stats.get_tests(), 1000);
-    }
 
     #[test]
     fn test_parse_duration_minutes() {
