@@ -1,6 +1,7 @@
 mod error;
 mod patterns;
 mod stats;
+mod traits;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
