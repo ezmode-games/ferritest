@@ -1,8 +1,22 @@
 mod cpu;
 mod error;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod patterns;
 mod stats;
 mod traits;
+
+#[cfg(feature = "gpu")]
+#[allow(dead_code)] // Will be used when --gpu flag is added
+fn gpu_available() -> bool {
+    true // Placeholder
+}
+
+#[cfg(not(feature = "gpu"))]
+#[allow(dead_code)] // Will be used when --gpu flag is added
+fn gpu_available() -> bool {
+    false
+}
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
