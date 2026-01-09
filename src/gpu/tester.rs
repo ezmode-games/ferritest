@@ -20,13 +20,13 @@ use wgpu::{Adapter, Device, Queue};
 ///
 /// Tests GPU memory using compute shaders that write and verify
 /// test patterns in VRAM.
-#[allow(dead_code)] // Used in Issue #15, integrated in Issue #16
 pub struct GpuTester {
     /// The wgpu device for GPU operations.
     device: Device,
     /// The command queue for submitting work.
     queue: Queue,
     /// Information about the GPU being tested.
+    #[allow(dead_code)] // Used in MemoryTester::device_info()
     gpu_info: GpuInfo,
     /// Shader manager with compute pipelines.
     shaders: ShaderManager,
@@ -34,11 +34,11 @@ pub struct GpuTester {
     buffers: BufferManager,
     /// Timeout for GPU operations.
     timeout: Duration,
-    /// Enable verbose output.
+    /// Enable verbose output (used via config.verbose in run_tests).
+    #[allow(dead_code)]
     verbose: bool,
 }
 
-#[allow(dead_code)] // Used in Issue #15, integrated in Issue #16
 impl GpuTester {
     /// Creates a new GPU tester for the specified adapter.
     ///
@@ -89,11 +89,13 @@ impl GpuTester {
     }
 
     /// Returns information about the GPU being tested.
+    #[allow(dead_code)] // Used in tests
     pub fn gpu_info(&self) -> &GpuInfo {
         &self.gpu_info
     }
 
     /// Returns the amount of memory being tested in bytes.
+    #[allow(dead_code)] // Used in tests
     pub fn buffer_size(&self) -> u64 {
         self.buffers.buffer_size()
     }
