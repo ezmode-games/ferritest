@@ -296,7 +296,7 @@ impl MemoryTester for GpuTester {
                     duration_ms,
                 });
 
-                if self.verbose && errors.error_count > 0 {
+                if config.verbose && errors.error_count > 0 {
                     eprintln!(
                         "GPU Error: {} at offset {:#x} - expected {:#x}, got {:#x}",
                         pattern.name(),
