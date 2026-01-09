@@ -44,11 +44,15 @@ pub struct ShaderManager {
 }
 
 impl ShaderManager {
-    /// Creates a new ShaderManager with compiled shaders and pipelines.
+    /// Creates a new `ShaderManager` with compiled shaders and pipelines.
+    ///
+    /// Returns `Ok(Self)` on success. The `Result` type allows for future
+    /// error handling extensions.
     ///
     /// # Panics
     ///
-    /// Panics if shader compilation fails.
+    /// Panics if shader compilation or pipeline creation fails. These failures
+    /// are handled internally by wgpu and are not returned as `GpuError`.
     pub fn new(device: &Device) -> Result<Self, GpuError> {
         // Create shader modules
         let write_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {

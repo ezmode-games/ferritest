@@ -1,5 +1,11 @@
 // WGSL compute shader for memory test pattern generation
 // This shader writes test patterns to GPU memory for VRAM testing.
+//
+// NOTE: GPU patterns use 32-bit values (u32) while CPU patterns use 64-bit (u64).
+// This is intentional - GPU testing focuses on VRAM integrity using native GPU
+// data types, not bit-for-bit equivalence with CPU patterns. The patterns serve
+// the same purpose (detecting stuck bits, coupling faults, etc.) but operate on
+// different word sizes appropriate to each platform.
 
 // Pattern ID constants (must match Rust TestPattern enum order)
 const PATTERN_WALKING_ONES: u32 = 0u;
@@ -22,8 +28,10 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> data: array<u32>;
 
-// XORShift32 PRNG for deterministic random pattern
-// Must match Rust implementation for consistency
+// XORShift32 PRNG for deterministic random pattern generation.
+// Note: This differs from CPU's StdRng - GPU uses a lightweight PRNG suitable
+// for shader execution. The goal is deterministic, reproducible patterns for
+// each seed, not cross-platform bit-identical sequences.
 fn xorshift32(state: u32) -> u32 {
     var x = state;
     x = x ^ (x << 13u);
