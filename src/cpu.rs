@@ -3,8 +3,10 @@
 //! This module provides multi-threaded CPU memory testing using
 //! the test patterns defined in the patterns module.
 
+use crate::error::FerritestError;
 use crate::patterns::TestPattern;
 use crate::stats::TestStats;
+use crate::traits::{MemoryTester, TestConfig, TestResult};
 use crossbeam::channel;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rand::Rng;
@@ -330,6 +332,59 @@ fn worker_thread(
     progress.finish_with_message(format!("Thread {} complete", thread_id));
 }
 
+impl MemoryTester for CpuTester {
+    fn name(&self) -> &'static str {
+        "CPU/RAM"
+    }
+
+    fn device_info(&self) -> String {
+        format!(
+            "{} threads, {} MB block size",
+            self.num_threads,
+            BLOCK_SIZE / (1024 * 1024)
+        )
+    }
+
+    fn max_testable_memory(&self) -> u64 {
+        // Return configured memory in bytes
+        (self.config.memory_mb as u64) * 1024 * 1024
+    }
+
+    fn run_tests(
+        &mut self,
+        config: &TestConfig,
+        stats: Arc<TestStats>,
+        should_stop: Arc<AtomicBool>,
+    ) -> Result<Vec<TestResult>, FerritestError> {
+        let start_time = Instant::now();
+        let mut results = Vec::new();
+
+        // Run each pattern and collect results
+        let errors = self.run(Arc::clone(&stats), Arc::clone(&should_stop));
+
+        // Create a result for each pattern tested
+        // Since run() tests all patterns, we create aggregate results
+        for pattern in &config.patterns {
+            let duration_ms =
+                start_time.elapsed().as_millis() as u64 / config.patterns.len() as u64;
+            let bytes_per_pattern = stats.get_bytes() / config.patterns.len() as u64;
+
+            results.push(TestResult {
+                bytes_tested: bytes_per_pattern,
+                errors_found: if errors.iter().any(|e| e.pattern == *pattern) {
+                    1
+                } else {
+                    0
+                },
+                pattern: *pattern,
+                duration_ms,
+            });
+        }
+
+        Ok(results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +430,19 @@ mod tests {
         assert!(stats.get_bytes() > 0);
         assert_eq!(stats.get_errors(), 0);
         assert_eq!(stats.get_tests(), 1);
+    }
+
+    #[test]
+    fn test_cpu_tester_memory_tester_trait() {
+        let config = CpuTesterConfig {
+            threads: Some(2),
+            ..Default::default()
+        };
+        let tester = CpuTester::new(config);
+
+        // Test trait methods
+        assert_eq!(MemoryTester::name(&tester), "CPU/RAM");
+        assert!(!MemoryTester::device_info(&tester).is_empty());
+        assert!(MemoryTester::max_testable_memory(&tester) > 0);
     }
 }
