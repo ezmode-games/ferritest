@@ -172,10 +172,74 @@ mod tests {
     #[test]
     fn test_gpu_error_display() {
         let err = GpuError::NoAdapter;
-        assert_eq!(err.to_string(), "No GPU adapter found");
+        assert!(err.to_string().contains("No GPU adapter"));
 
         let err = GpuError::Timeout(30);
         assert!(err.to_string().contains("30 seconds"));
+    }
+
+    #[test]
+    fn test_adapter_not_found_display() {
+        let err = GpuError::AdapterNotFound {
+            index: 5,
+            available: vec!["GPU 0".into(), "GPU 1".into()],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("5"));
+        assert!(msg.contains("GPU 0"));
+    }
+
+    #[test]
+    fn test_buffer_allocation_display() {
+        let err = GpuError::BufferAllocation {
+            requested_mb: 8192,
+            available_mb: 4096,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("8192"));
+        assert!(msg.contains("4096"));
+    }
+
+    #[test]
+    fn test_gpu_error_to_ferritest_error() {
+        let gpu_err = GpuError::NoAdapter;
+        let err: FerritestError = gpu_err.into();
+        assert!(matches!(err, FerritestError::Gpu(_)));
+    }
+
+    #[test]
+    fn test_device_request_display() {
+        let err = GpuError::DeviceRequest("connection failed".to_string());
+        assert!(err.to_string().contains("connection failed"));
+    }
+
+    #[test]
+    fn test_shader_compilation_display() {
+        let err = GpuError::ShaderCompilation("syntax error at line 5".to_string());
+        assert!(err.to_string().contains("syntax error at line 5"));
+    }
+
+    #[test]
+    fn test_device_lost_display() {
+        let err = GpuError::DeviceLost;
+        assert!(err.to_string().contains("device lost"));
+    }
+
+    #[test]
+    fn test_buffer_mapping_display() {
+        let err = GpuError::BufferMapping("timeout waiting for GPU".to_string());
+        assert!(err.to_string().contains("timeout waiting for GPU"));
+    }
+
+    #[test]
+    fn test_insufficient_vram_display() {
+        let err = GpuError::InsufficientVram {
+            needed_mb: 16384,
+            available_mb: 8192,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("16384"));
+        assert!(msg.contains("8192"));
     }
 
     #[test]

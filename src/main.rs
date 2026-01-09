@@ -1,5 +1,7 @@
 mod cpu;
 mod error;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod patterns;
 mod stats;
 mod traits;
@@ -35,6 +37,22 @@ struct Args {
         help = "Run continuously until error or interrupt"
     )]
     continuous: bool,
+
+    /// Test GPU VRAM instead of CPU RAM
+    #[arg(long, default_value_t = false)]
+    gpu: bool,
+
+    /// Select GPU by index (use --list-gpus to see available)
+    #[arg(long)]
+    gpu_index: Option<usize>,
+
+    /// List available GPUs and exit
+    #[arg(long, default_value_t = false)]
+    list_gpus: bool,
+
+    /// Timeout per GPU operation in seconds
+    #[arg(long, default_value_t = 30)]
+    gpu_timeout: u64,
 }
 
 fn parse_duration(s: &str) -> Option<Duration> {
@@ -46,6 +64,44 @@ fn parse_duration(s: &str) -> Option<Duration> {
 
 fn main() {
     let args = Args::parse();
+
+    // Handle --list-gpus early
+    if args.list_gpus {
+        #[cfg(feature = "gpu")]
+        {
+            let gpus = gpu::enumerate_gpus();
+            if gpus.is_empty() {
+                println!("No GPUs found.");
+            } else {
+                println!("Available GPUs:");
+                for gpu_info in &gpus {
+                    println!("  {}", gpu_info);
+                }
+                println!();
+                println!("Use --gpu to test VRAM, --gpu-index N to select specific GPU");
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            println!("GPU support not compiled. Build with: cargo build --features gpu");
+        }
+        std::process::exit(0);
+    }
+
+    // Validate --gpu flag
+    if args.gpu {
+        #[cfg(not(feature = "gpu"))]
+        {
+            eprintln!("Error: GPU support not compiled.");
+            eprintln!("Build with: cargo build --features gpu");
+            std::process::exit(1);
+        }
+    }
+
+    // Warn if --gpu-index used without --gpu
+    if args.gpu_index.is_some() && !args.gpu {
+        eprintln!("Warning: --gpu-index has no effect without --gpu flag");
+    }
 
     // Create CPU tester configuration
     let config = CpuTesterConfig {
@@ -134,5 +190,36 @@ mod tests {
     fn test_parse_duration_invalid() {
         assert!(parse_duration("invalid").is_none());
         assert!(parse_duration("").is_none());
+    }
+
+    #[test]
+    fn test_parse_gpu_flag() {
+        let args = Args::parse_from(["ferritest", "--gpu"]);
+        assert!(args.gpu);
+    }
+
+    #[test]
+    fn test_parse_gpu_index() {
+        let args = Args::parse_from(["ferritest", "--gpu", "--gpu-index", "1"]);
+        assert!(args.gpu);
+        assert_eq!(args.gpu_index, Some(1));
+    }
+
+    #[test]
+    fn test_parse_list_gpus() {
+        let args = Args::parse_from(["ferritest", "--list-gpus"]);
+        assert!(args.list_gpus);
+    }
+
+    #[test]
+    fn test_default_gpu_timeout() {
+        let args = Args::parse_from(["ferritest"]);
+        assert_eq!(args.gpu_timeout, 30);
+    }
+
+    #[test]
+    fn test_custom_gpu_timeout() {
+        let args = Args::parse_from(["ferritest", "--gpu-timeout", "60"]);
+        assert_eq!(args.gpu_timeout, 60);
     }
 }
