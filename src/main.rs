@@ -28,6 +28,33 @@ use traits::{MemoryTester, TestConfig};
 
 const DEFAULT_TOTAL_MB: usize = 1024; // 1 GB default
 
+/// GPU selection mode for multi-GPU systems.
+#[cfg(feature = "gpu")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum GpuSelection {
+    /// Auto-select best GPU (discrete > integrated).
+    Auto,
+    /// Select specific GPU by index.
+    Index(usize),
+    /// Test all available GPUs sequentially.
+    All,
+}
+
+#[cfg(feature = "gpu")]
+impl GpuSelection {
+    /// Parse GPU selection from command-line argument.
+    pub fn parse(s: Option<&str>) -> Result<Self, String> {
+        match s {
+            None => Ok(Self::Auto),
+            Some("all") => Ok(Self::All),
+            Some(n) => n
+                .parse::<usize>()
+                .map(Self::Index)
+                .map_err(|_| format!("Invalid GPU index: '{}'. Use a number or 'all'.", n)),
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Comprehensive memory stress tester", long_about = None)]
 struct Args {
@@ -54,9 +81,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     gpu: bool,
 
-    /// Select GPU by index (use --list-gpus to see available)
-    #[arg(long)]
-    gpu_index: Option<usize>,
+    /// Select GPU by index or 'all' for all GPUs (use --list-gpus to see available)
+    #[arg(long, value_name = "INDEX|all")]
+    gpu_index: Option<String>,
 
     /// List available GPUs and exit
     #[arg(long, default_value_t = false)]
@@ -74,6 +101,39 @@ fn parse_duration(s: &str) -> Option<Duration> {
     humantime::parse_duration(s).ok()
 }
 
+/// Find the default GPU index using auto-select logic (discrete > integrated > virtual).
+#[cfg(feature = "gpu")]
+fn find_default_gpu_index(gpus: &[gpu::GpuInfo]) -> usize {
+    use wgpu::DeviceType;
+
+    // Prefer discrete GPU
+    if let Some(gpu) = gpus
+        .iter()
+        .find(|g| g.device_type == DeviceType::DiscreteGpu)
+    {
+        return gpu.index;
+    }
+
+    // Then integrated GPU
+    if let Some(gpu) = gpus
+        .iter()
+        .find(|g| g.device_type == DeviceType::IntegratedGpu)
+    {
+        return gpu.index;
+    }
+
+    // Then virtual GPU
+    if let Some(gpu) = gpus
+        .iter()
+        .find(|g| g.device_type == DeviceType::VirtualGpu)
+    {
+        return gpu.index;
+    }
+
+    // Fall back to first
+    0
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -81,16 +141,37 @@ fn main() {
     if args.list_gpus {
         #[cfg(feature = "gpu")]
         {
-            let gpus = gpu::enumerate_gpus();
+            let gpus = enumerate_gpus();
             if gpus.is_empty() {
                 println!("No GPUs found.");
             } else {
+                // Find the default GPU index (auto-select logic)
+                let default_index = find_default_gpu_index(&gpus);
+
                 println!("Available GPUs:");
                 for gpu_info in &gpus {
-                    println!("  {}", gpu_info);
+                    let marker = if gpu_info.index == default_index {
+                        " [DEFAULT]"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "  [{}] {} ({:?}, {:?}){}",
+                        gpu_info.index,
+                        gpu_info.name,
+                        gpu_info.backend,
+                        gpu_info.device_type,
+                        marker
+                    );
                 }
                 println!();
-                println!("Use --gpu to test VRAM, --gpu-index N to select specific GPU");
+                println!("Use:");
+                println!(
+                    "  --gpu                    Test default GPU [{}]",
+                    default_index
+                );
+                println!("  --gpu --gpu-index N      Test specific GPU");
+                println!("  --gpu --gpu-index all    Test all GPUs sequentially");
             }
         }
         #[cfg(not(feature = "gpu"))]
@@ -180,8 +261,37 @@ fn run_cpu_test(args: &Args) {
 
 #[cfg(feature = "gpu")]
 fn run_gpu_test(args: &Args) {
+    // Parse GPU selection
+    let selection = match GpuSelection::parse(args.gpu_index.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            let gpus = enumerate_gpus();
+            if !gpus.is_empty() {
+                eprintln!("\nAvailable GPUs:");
+                for gpu in &gpus {
+                    eprintln!("  [{}] {}", gpu.index, gpu.name);
+                }
+            }
+            std::process::exit(1);
+        }
+    };
+
+    // Handle "all" GPUs mode
+    if selection == GpuSelection::All {
+        run_all_gpus_test(args);
+        return;
+    }
+
+    // Convert selection to index for select_gpu
+    let gpu_index_opt = match &selection {
+        GpuSelection::Auto => None,
+        GpuSelection::Index(i) => Some(*i),
+        GpuSelection::All => unreachable!(),
+    };
+
     // Select GPU
-    let adapter = match select_gpu(args.gpu_index) {
+    let adapter = match select_gpu(gpu_index_opt) {
         Ok(adapter) => adapter,
         Err(e) => {
             eprintln!("Error selecting GPU: {}", e);
@@ -191,7 +301,11 @@ fn run_gpu_test(args: &Args) {
 
     // Get GPU info
     let gpus = enumerate_gpus();
-    let gpu_index = args.gpu_index.unwrap_or(0);
+    let gpu_index = match &selection {
+        GpuSelection::Auto => find_default_gpu_index(&gpus),
+        GpuSelection::Index(i) => *i,
+        GpuSelection::All => unreachable!(),
+    };
     let gpu_info = if gpu_index < gpus.len() {
         gpus[gpu_index].clone()
     } else {
@@ -323,6 +437,135 @@ fn run_gpu_test(args: &Args) {
     }
 }
 
+/// Run tests on all available GPUs sequentially.
+#[cfg(feature = "gpu")]
+fn run_all_gpus_test(args: &Args) {
+    let gpus = enumerate_gpus();
+
+    if gpus.is_empty() {
+        eprintln!("No GPUs found.");
+        std::process::exit(1);
+    }
+
+    println!("Testing {} GPU(s) sequentially...", gpus.len());
+    println!();
+
+    let mut all_passed = true;
+    let mut gpu_results: Vec<(String, bool, u64)> = Vec::new();
+    let overall_start = Instant::now();
+
+    for gpu_info in &gpus {
+        println!("=== GPU {}: {} ===", gpu_info.index, gpu_info.name);
+
+        let adapter = match select_gpu(Some(gpu_info.index)) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("Error selecting GPU {}: {}", gpu_info.index, e);
+                gpu_results.push((gpu_info.name.clone(), false, 0));
+                all_passed = false;
+                println!();
+                continue;
+            }
+        };
+
+        let mut tester = match GpuTester::new(
+            adapter,
+            gpu_info.clone(),
+            args.memory_mb,
+            args.gpu_timeout,
+            args.verbose,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Error creating tester for GPU {}: {}", gpu_info.index, e);
+                gpu_results.push((gpu_info.name.clone(), false, 0));
+                all_passed = false;
+                println!();
+                continue;
+            }
+        };
+
+        let config = TestConfig {
+            memory_mb: args.memory_mb,
+            patterns: patterns::TestPattern::all_patterns(),
+            continuous: false, // Single pass per GPU in all mode
+            timeout: args.duration.as_ref().and_then(|s| parse_duration(s)),
+            threads: None,
+            verbose: args.verbose,
+        };
+
+        let stats = Arc::new(TestStats::new());
+        let should_stop = Arc::new(AtomicBool::new(false));
+        let gpu_start = Instant::now();
+
+        let results = tester.run_tests(&config, Arc::clone(&stats), should_stop);
+
+        let total_errors: u64 = match &results {
+            Ok(r) => r.iter().map(|r| r.errors_found).sum(),
+            Err(_) => 0,
+        };
+
+        let duration = gpu_start.elapsed().as_secs_f64();
+
+        match results {
+            Ok(_) if total_errors == 0 => {
+                println!(
+                    "PASSED: {} MB tested, {:.1}s",
+                    stats.get_bytes() / (1024 * 1024),
+                    duration
+                );
+                gpu_results.push((gpu_info.name.clone(), true, 0));
+            }
+            Ok(_) => {
+                println!(
+                    "FAILED: {} errors, {} MB tested, {:.1}s",
+                    total_errors,
+                    stats.get_bytes() / (1024 * 1024),
+                    duration
+                );
+                gpu_results.push((gpu_info.name.clone(), false, total_errors));
+                all_passed = false;
+            }
+            Err(e) => {
+                eprintln!("ERROR: {}", e);
+                gpu_results.push((gpu_info.name.clone(), false, 0));
+                all_passed = false;
+            }
+        }
+        println!();
+    }
+
+    // Print summary
+    println!("====================");
+    println!("Multi-GPU Test Summary");
+    println!("====================");
+    for (name, passed, errors) in &gpu_results {
+        let status = if *passed {
+            "PASSED"
+        } else if *errors > 0 {
+            "FAILED"
+        } else {
+            "ERROR"
+        };
+        println!("  {} - {}", name, status);
+    }
+    println!();
+    println!(
+        "Total duration: {:.1}s",
+        overall_start.elapsed().as_secs_f64()
+    );
+
+    if all_passed {
+        println!();
+        println!("SUCCESS: All GPUs passed!");
+        std::process::exit(0);
+    } else {
+        println!();
+        println!("FAILURE: Some GPUs failed!");
+        std::process::exit(1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,7 +614,14 @@ mod tests {
     fn test_parse_gpu_index() {
         let args = Args::parse_from(["ferritest", "--gpu", "--gpu-index", "1"]);
         assert!(args.gpu);
-        assert_eq!(args.gpu_index, Some(1));
+        assert_eq!(args.gpu_index, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_gpu_index_all() {
+        let args = Args::parse_from(["ferritest", "--gpu", "--gpu-index", "all"]);
+        assert!(args.gpu);
+        assert_eq!(args.gpu_index, Some("all".to_string()));
     }
 
     #[test]
@@ -390,5 +640,41 @@ mod tests {
     fn test_custom_gpu_timeout() {
         let args = Args::parse_from(["ferritest", "--gpu-timeout", "60"]);
         assert_eq!(args.gpu_timeout, 60);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_selection_parse_auto() {
+        assert!(matches!(GpuSelection::parse(None), Ok(GpuSelection::Auto)));
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_selection_parse_index() {
+        assert!(matches!(
+            GpuSelection::parse(Some("0")),
+            Ok(GpuSelection::Index(0))
+        ));
+        assert!(matches!(
+            GpuSelection::parse(Some("2")),
+            Ok(GpuSelection::Index(2))
+        ));
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_selection_parse_all() {
+        assert!(matches!(
+            GpuSelection::parse(Some("all")),
+            Ok(GpuSelection::All)
+        ));
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_selection_parse_invalid() {
+        assert!(GpuSelection::parse(Some("foo")).is_err());
+        assert!(GpuSelection::parse(Some("")).is_err());
+        assert!(GpuSelection::parse(Some("-1")).is_err());
     }
 }
