@@ -3,14 +3,16 @@
 //! This module provides the core `GpuTester` struct that orchestrates
 //! GPU VRAM memory testing using compute shaders.
 
-#![allow(dead_code)] // Used in Issue #15
-
-use crate::error::GpuError;
+use crate::error::{FerritestError, GpuError};
 use crate::gpu::buffers::{BufferManager, ErrorInfo, ShaderParams};
 use crate::gpu::device::GpuInfo;
 use crate::gpu::shaders::{ShaderManager, WORKGROUP_SIZE};
 use crate::patterns::TestPattern;
+use crate::stats::TestStats;
+use crate::traits::{MemoryTester, TestConfig, TestResult};
 use pollster::block_on;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu::{Adapter, Device, Queue};
 
@@ -18,6 +20,7 @@ use wgpu::{Adapter, Device, Queue};
 ///
 /// Tests GPU memory using compute shaders that write and verify
 /// test patterns in VRAM.
+#[allow(dead_code)] // Used in Issue #15, integrated in Issue #16
 pub struct GpuTester {
     /// The wgpu device for GPU operations.
     device: Device,
@@ -35,6 +38,7 @@ pub struct GpuTester {
     verbose: bool,
 }
 
+#[allow(dead_code)] // Used in Issue #15, integrated in Issue #16
 impl GpuTester {
     /// Creates a new GPU tester for the specified adapter.
     ///
@@ -234,6 +238,87 @@ impl GpuTester {
     }
 }
 
+impl MemoryTester for GpuTester {
+    fn name(&self) -> &'static str {
+        "GPU/VRAM"
+    }
+
+    fn device_info(&self) -> String {
+        format!("{} ({:?})", self.gpu_info.name, self.gpu_info.backend)
+    }
+
+    fn max_testable_memory(&self) -> u64 {
+        self.buffers.buffer_size()
+    }
+
+    fn run_tests(
+        &mut self,
+        config: &TestConfig,
+        stats: Arc<TestStats>,
+        should_stop: Arc<AtomicBool>,
+    ) -> Result<Vec<TestResult>, FerritestError> {
+        let mut results = Vec::new();
+        let mut pass = 0u64;
+        let start_time = Instant::now();
+
+        loop {
+            for pattern in &config.patterns {
+                if should_stop.load(Ordering::Relaxed) {
+                    return Ok(results);
+                }
+
+                // Check timeout
+                if let Some(timeout) = config.timeout {
+                    if start_time.elapsed() >= timeout {
+                        return Ok(results);
+                    }
+                }
+
+                let pattern_start = Instant::now();
+                let seed = (pass * 1000 + pattern.pattern_id() as u64) as u32;
+
+                let errors = self.run_pattern(*pattern, seed)?;
+
+                let duration_ms = pattern_start.elapsed().as_millis() as u64;
+                let bytes = self.buffers.buffer_size();
+
+                // Update stats
+                stats.add_bytes(bytes);
+                stats.add_test();
+                if errors.error_count > 0 {
+                    stats.add_error();
+                }
+
+                results.push(TestResult {
+                    bytes_tested: bytes,
+                    errors_found: errors.error_count as u64,
+                    pattern: *pattern,
+                    duration_ms,
+                });
+
+                if config.verbose && errors.error_count > 0 {
+                    eprintln!(
+                        "GPU Error: {} at offset {:#x} - expected {:#x}, got {:#x}",
+                        pattern.name(),
+                        errors.first_error_index * 4,
+                        errors.first_error_expected,
+                        errors.first_error_actual
+                    );
+                }
+            }
+
+            pass += 1;
+
+            // Check termination conditions
+            if !config.continuous {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +425,67 @@ mod tests {
                 result
             );
         }
+    }
+
+    #[test]
+    fn test_memory_tester_trait_name() {
+        let Some(tester) = setup_tester(16) else {
+            println!("No GPU available, skipping trait name test");
+            return;
+        };
+
+        assert_eq!(MemoryTester::name(&tester), "GPU/VRAM");
+    }
+
+    #[test]
+    fn test_memory_tester_trait_device_info() {
+        let Some(tester) = setup_tester(16) else {
+            println!("No GPU available, skipping trait device info test");
+            return;
+        };
+
+        let info = MemoryTester::device_info(&tester);
+        assert!(!info.is_empty());
+        // Should contain the GPU name
+        assert!(info.contains(&tester.gpu_info().name));
+    }
+
+    #[test]
+    fn test_memory_tester_trait_max_memory() {
+        let Some(tester) = setup_tester(16) else {
+            println!("No GPU available, skipping trait max memory test");
+            return;
+        };
+
+        assert_eq!(MemoryTester::max_testable_memory(&tester), 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_memory_tester_trait_run_tests() {
+        let Some(mut tester) = setup_tester(16) else {
+            println!("No GPU available, skipping trait run_tests test");
+            return;
+        };
+
+        let config = TestConfig {
+            memory_mb: 16,
+            patterns: vec![TestPattern::AllZeros, TestPattern::AllOnes],
+            continuous: false,
+            timeout: None,
+            threads: None,
+            verbose: false,
+        };
+        let stats = Arc::new(TestStats::new());
+        let should_stop = Arc::new(AtomicBool::new(false));
+
+        let results = tester.run_tests(&config, stats.clone(), should_stop);
+        assert!(results.is_ok());
+
+        let results = results.unwrap();
+        assert_eq!(results.len(), 2); // Two patterns
+
+        // Stats should be updated
+        assert!(stats.get_bytes() >= 16 * 1024 * 1024 * 2);
+        assert_eq!(stats.get_tests(), 2);
     }
 }
