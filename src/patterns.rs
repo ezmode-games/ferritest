@@ -56,7 +56,7 @@ impl TestPattern {
     /// Returns the numeric pattern ID for GPU shaders.
     ///
     /// These IDs must match the constants in the WGSL shader files.
-    #[allow(dead_code)] // Used in Issue #14, integrated in Issue #16
+    #[cfg(feature = "gpu")]
     pub fn pattern_id(&self) -> u32 {
         match self {
             Self::WalkingOnes => 0,
