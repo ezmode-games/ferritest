@@ -157,12 +157,19 @@ fn main() {
                     };
                     println!(
                         "  [{}] {} ({:?}, {:?}){}",
-                        gpu_info.index, gpu_info.name, gpu_info.backend, gpu_info.device_type, marker
+                        gpu_info.index,
+                        gpu_info.name,
+                        gpu_info.backend,
+                        gpu_info.device_type,
+                        marker
                     );
                 }
                 println!();
                 println!("Use:");
-                println!("  --gpu                    Test default GPU [{}]", default_index);
+                println!(
+                    "  --gpu                    Test default GPU [{}]",
+                    default_index
+                );
                 println!("  --gpu --gpu-index N      Test specific GPU");
                 println!("  --gpu --gpu-index all    Test all GPUs sequentially");
             }
