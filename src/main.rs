@@ -6,16 +6,13 @@ mod patterns;
 mod stats;
 mod traits;
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cpu::{CpuTester, CpuTesterConfig};
 use stats::TestStats;
-
-#[cfg(feature = "gpu")]
-use std::sync::atomic::Ordering;
 
 #[cfg(feature = "gpu")]
 use gpu::{enumerate_gpus, select_gpu, GpuTester};
@@ -137,6 +134,16 @@ fn find_default_gpu_index(gpus: &[gpu::GpuInfo]) -> usize {
 fn main() {
     let args = Args::parse();
 
+    // Set up Ctrl+C handler for graceful shutdown
+    let should_stop = Arc::new(AtomicBool::new(false));
+    let should_stop_handler = Arc::clone(&should_stop);
+    ctrlc::set_handler(move || {
+        println!();
+        println!("Received Ctrl+C, stopping gracefully...");
+        should_stop_handler.store(true, Ordering::Relaxed);
+    })
+    .expect("Error setting Ctrl+C handler");
+
     // Handle --list-gpus early
     if args.list_gpus {
         #[cfg(feature = "gpu")]
@@ -200,14 +207,14 @@ fn main() {
     if args.gpu {
         #[cfg(feature = "gpu")]
         {
-            run_gpu_test(&args);
+            run_gpu_test(&args, Arc::clone(&should_stop));
         }
     } else {
-        run_cpu_test(&args);
+        run_cpu_test(&args, Arc::clone(&should_stop));
     }
 }
 
-fn run_cpu_test(args: &Args) {
+fn run_cpu_test(args: &Args, should_stop: Arc<AtomicBool>) {
     // Create CPU tester configuration
     let config = CpuTesterConfig {
         memory_mb: args.memory_mb,
@@ -219,16 +226,21 @@ fn run_cpu_test(args: &Args) {
 
     let tester = CpuTester::new(config);
     let stats = Arc::new(TestStats::new());
-    let should_stop = Arc::new(AtomicBool::new(false));
 
     let start_time = Instant::now();
 
     // Run the test
     let errors = tester.run(Arc::clone(&stats), Arc::clone(&should_stop));
 
+    let was_interrupted = should_stop.load(Ordering::Relaxed);
+
     // Print results
     println!();
-    println!("Test Complete");
+    if was_interrupted {
+        println!("Test Interrupted");
+    } else {
+        println!("Test Complete");
+    }
     println!("=============");
     println!(
         "Total bytes tested: {} MB",
@@ -260,7 +272,7 @@ fn run_cpu_test(args: &Args) {
 }
 
 #[cfg(feature = "gpu")]
-fn run_gpu_test(args: &Args) {
+fn run_gpu_test(args: &Args, should_stop: Arc<AtomicBool>) {
     // Parse GPU selection
     let selection = match GpuSelection::parse(args.gpu_index.as_deref()) {
         Ok(s) => s,
@@ -279,7 +291,7 @@ fn run_gpu_test(args: &Args) {
 
     // Handle "all" GPUs mode
     if selection == GpuSelection::All {
-        run_all_gpus_test(args);
+        run_all_gpus_test(args, Arc::clone(&should_stop));
         return;
     }
 
@@ -357,7 +369,6 @@ fn run_gpu_test(args: &Args) {
     };
 
     let stats = Arc::new(TestStats::new());
-    let should_stop = Arc::new(AtomicBool::new(false));
     let start_time = Instant::now();
 
     // Create progress bar
@@ -393,13 +404,20 @@ fn run_gpu_test(args: &Args) {
     // Run GPU tests
     let results = tester.run_tests(&config, Arc::clone(&stats), Arc::clone(&should_stop));
 
+    // Check if interrupted before signaling stop
+    let was_interrupted = should_stop.load(Ordering::Relaxed);
+
     // Signal progress thread to stop
     should_stop.store(true, Ordering::Relaxed);
     progress_handle.join().expect("Progress thread panicked");
 
     // Update progress bar with final count
     pb.set_position(config.patterns.len() as u64);
-    pb.finish_with_message("Complete");
+    pb.finish_with_message(if was_interrupted {
+        "Interrupted"
+    } else {
+        "Complete"
+    });
 
     // Print results
     let total_errors: u64 = match &results {
@@ -408,7 +426,11 @@ fn run_gpu_test(args: &Args) {
     };
 
     println!();
-    println!("Test Complete");
+    if was_interrupted {
+        println!("Test Interrupted");
+    } else {
+        println!("Test Complete");
+    }
     println!("=============");
     println!(
         "Total bytes tested: {} MB",
@@ -439,7 +461,7 @@ fn run_gpu_test(args: &Args) {
 
 /// Run tests on all available GPUs sequentially.
 #[cfg(feature = "gpu")]
-fn run_all_gpus_test(args: &Args) {
+fn run_all_gpus_test(args: &Args, should_stop: Arc<AtomicBool>) {
     let gpus = enumerate_gpus();
 
     if gpus.is_empty() {
@@ -495,10 +517,15 @@ fn run_all_gpus_test(args: &Args) {
         };
 
         let stats = Arc::new(TestStats::new());
-        let should_stop = Arc::new(AtomicBool::new(false));
         let gpu_start = Instant::now();
 
-        let results = tester.run_tests(&config, Arc::clone(&stats), should_stop);
+        // Check if we should stop before testing this GPU
+        if should_stop.load(Ordering::Relaxed) {
+            println!("Interrupted, skipping remaining GPUs...");
+            break;
+        }
+
+        let results = tester.run_tests(&config, Arc::clone(&stats), Arc::clone(&should_stop));
 
         let total_errors: u64 = match &results {
             Ok(r) => r.iter().map(|r| r.errors_found).sum(),
