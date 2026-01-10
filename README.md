@@ -55,6 +55,14 @@ cd ferritest
 cargo build --release
 ```
 
+### Building Without GPU Support
+
+GPU support is enabled by default. To build a smaller binary without GPU support:
+
+```bash
+cargo build --release --no-default-features
+```
+
 ## Usage Examples
 
 ```bash
@@ -77,7 +85,46 @@ ferritest -t 8
 ferritest -m 16384 --continuous
 ```
 
+## GPU Memory Testing
+
+ferritest can also test your GPU's video memory (VRAM) using compute shaders with the same patterns.
+
+### GPU Quick Start
+
+```bash
+# List available GPUs
+ferritest --list-gpus
+
+# Test default GPU (1GB VRAM)
+ferritest --gpu
+
+# Test 4GB of VRAM
+ferritest --gpu -m 4096
+
+# Test specific GPU by index
+ferritest --gpu --gpu-index 1
+
+# Test all GPUs sequentially
+ferritest --gpu --gpu-index all
+```
+
+### Platform Support
+
+| Platform | GPU Backend |
+|----------|-------------|
+| Windows  | DirectX 12, Vulkan |
+| macOS    | Metal |
+| Linux    | Vulkan |
+
+### GPU Limitations
+
+- Cannot test 100% of VRAM (driver/OS reserves memory)
+- Requires compatible GPU with Vulkan/Metal/DX12 support
+- GPU tests may be slower than CPU due to readback latency
+
 ## Command Line Options
+
+### General Options
 
 | Option | Description |
 |--------|-------------|
@@ -87,6 +134,15 @@ ferritest -m 16384 --continuous
 | `--continuous` | Run until error or Ctrl+C |
 | `-v, --verbose` | Verbose output |
 | `-h, --help` | Show help |
+
+### GPU Options
+
+| Option | Description |
+|--------|-------------|
+| `--gpu` | Enable GPU VRAM testing instead of CPU RAM |
+| `--gpu-index <N\|all>` | Select GPU by index or test all GPUs |
+| `--list-gpus` | Show available GPUs and exit |
+| `--gpu-timeout <SECS>` | Per-operation timeout (default: 30) |
 
 ## What It Tests
 
@@ -141,10 +197,17 @@ Useful for scripting: `ferritest && echo "RAM OK" || echo "RAM BAD"`
 
 ## Technical Details
 
+### CPU Testing
 - Multi-threaded (uses all CPU cores by default)
 - 64 MB block size for optimal cache behavior
 - Lock-free statistics via `Arc<AtomicU64>`
 - Zero unsafe code
+
+### GPU Testing
+- Cross-platform via wgpu (Vulkan/Metal/DX12)
+- WGSL compute shaders for pattern generation and verification
+- Atomic error counting on GPU
+- Staging buffer for error readback
 
 ## License
 
